@@ -1,0 +1,64 @@
+name: Terraform
+
+# E0 (spec 08): validate em todo PR/push; plan quando há credenciais da sessão AWS
+# Academy. apply por branch (homolog -> hml, main -> prod) e destroy entram em E2.
+on:
+  push:
+    branches: [main, homolog]
+  pull_request:
+    branches: [main, homolog]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.10.5"
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform fmt -check -recursive -diff
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  plan:
+    name: plan
+    needs: [validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Credenciais da sessão presentes?
+        id: creds
+        run: echo "present=${{ secrets.AWS_ACCESS_KEY_ID != '' }}" >> "$GITHUB_OUTPUT"
+      - name: Sem credenciais AWS na sessão — plan não executado
+        if: steps.creds.outputs.present != 'true'
+        run: echo "::notice::AWS_ACCESS_KEY_ID ausente; terraform plan requer as credenciais STS da sessão AWS Academy."
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.creds.outputs.present == 'true'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.creds.outputs.present == 'true'
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform plan
+        if: steps.creds.outputs.present == 'true'
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -no-color
