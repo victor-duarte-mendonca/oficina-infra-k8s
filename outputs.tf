@@ -8,11 +8,6 @@ output "application_url" {
   value       = "http://${aws_eip.k3s.public_ip}"
 }
 
-output "rds_endpoint" {
-  description = "Host do RDS, usado no Secret oficina-secrets (DB_HOST)"
-  value       = aws_db_instance.main.address
-}
-
 output "ecr_repository_url" {
   description = "URL do repositório ECR, usada na imagem do Deployment"
   value       = aws_ecr_repository.main.repository_url
