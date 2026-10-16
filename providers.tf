@@ -18,13 +18,13 @@ provider "aws" {
   region = var.aws_region
 
   # Toda a identificação de recursos em um lugar só: sem isto, as tags ficavam
-  # dependentes de cada resource lembrar de repeti-las, e os comandos de conferência
-  # de recursos órfãos do README (que filtram por tag:Project) perdiam recursos.
+  # dependentes de cada resource lembrar de repeti-las, e a varredura de órfãos do
+  # workflow de destroy (que filtra por tag Project/Environment) perdia recursos.
   default_tags {
     tags = {
       Project     = var.project_name
       ManagedBy   = "terraform"
-      Environment = "lab"
+      Environment = terraform.workspace
     }
   }
 }
