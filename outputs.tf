@@ -13,6 +13,11 @@ output "ecr_repository_url" {
   value       = aws_ecr_repository.main.repository_url
 }
 
+output "ssm_parameters" {
+  description = "Parâmetros SSM publicados para os demais repositórios"
+  value       = [for p in aws_ssm_parameter.contract : p.name]
+}
+
 # Recuperar quando necessário: terraform output -raw ssh_private_key > k3s-key.pem && chmod 600 k3s-key.pem
 output "ssh_private_key" {
   description = "Chave privada de acesso SSH à EC2 (gerada pelo Terraform)"

@@ -1,10 +1,16 @@
-# Bucket criado uma única vez, FORA deste módulo (bootstrap manual, ver README.md).
-# Troque o valor de "bucket" pelo nome escolhido no bootstrap antes do primeiro "terraform init".
+# State remoto em S3, um por workspace (hml/prod):
+#   s3://<bucket>/oficina/infra-k8s/<workspace>/terraform.tfstate
+#
+# O nome do bucket NÃO é fixo: nomes de S3 são globais e a conta AWS Academy é reciclada
+# (conta nova = ID novo), então um nome literal colidia ou apontava para um bucket morto.
+# Convenção: oficina-tfstate-<account-id>. Informado em tempo de init:
+#   terraform init -backend-config="bucket=oficina-tfstate-$(aws sts get-caller-identity --query Account --output text)"
+# O bucket é criado por scripts/bootstrap-state-bucket.sh (idempotente).
 terraform {
   backend "s3" {
-    bucket = "victor-duarte-mendonca-oficina-tfstate"
-    key    = "oficina/terraform.tfstate"
-    region = "us-east-1"
+    key                  = "terraform.tfstate"
+    workspace_key_prefix = "oficina/infra-k8s"
+    region               = "us-east-1"
 
     # Trava de state nativa do S3 (Terraform >= 1.10): grava um .tflock ao lado do
     # state e falha rápido se outro apply estiver em andamento. Sem isto, dois
@@ -13,8 +19,8 @@ terraform {
     # conta AWS Academy nem sempre permite criar.
     use_lockfile = true
 
-    # O bucket do backend guarda credenciais em texto no state (senha do RDS,
-    # chave privada da EC2). Criptografia no lado do servidor é obrigatória.
+    # O state guarda a chave privada da EC2 em texto. Criptografia no lado do
+    # servidor é obrigatória.
     encrypt = true
   }
 }
