@@ -11,7 +11,7 @@ REGION="${AWS_REGION:-us-east-1}"
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="oficina-tfstate-${ACCOUNT_ID}"
 
-if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+if aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
   echo "bucket $BUCKET já existe" >&2
 else
   echo "criando $BUCKET" >&2
@@ -20,10 +20,10 @@ else
 fi
 
 # Reaplicados sempre: são idempotentes e corrigem um bucket criado à mão sem eles.
-aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
+aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled >/dev/null
 aws s3api put-bucket-encryption --bucket "$BUCKET" \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}' >/dev/null
 aws s3api put-public-access-block --bucket "$BUCKET" \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
 
 echo "$BUCKET"
