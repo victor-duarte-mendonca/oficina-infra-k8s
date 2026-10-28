@@ -67,6 +67,9 @@ jobs:
     env:
       # PR para homolog ensaia em hml; PR para main (promoção) planeja prod.
       WORKSPACE: ${{ github.base_ref == 'main' && 'prod' || 'hml' }}
+      # A licença real é secret de environment (ver apply); o plan usa um placeholder para ensaiar o
+      # caminho com agentes. Em instância existente o plan mostra o parâmetro como alterado (ruído).
+      TF_VAR_newrelic_license_key: plan-only-placeholder
       # Credenciais via ambiente: a action configure-aws-credentials falha com token expirado
       # antes de eu poder tratar "sessão inativa" como "plan não executado".
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -129,6 +132,8 @@ jobs:
     environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'producao' || 'homologacao' }}
     env:
       WORKSPACE: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
+      # Opcional: sem a licença o cluster sobe sem agentes New Relic (E7).
+      TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
     concurrency:
       group: terraform-state-${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
       cancel-in-progress: false

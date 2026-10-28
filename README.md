@@ -103,6 +103,30 @@ Pela pipeline (`.github/workflows/terraform.yml`):
 
 `plan` só executa com as credenciais da sessão e o `ALLOWED_CIDR`; sem eles passa com um `::notice::`.
 
+## Observabilidade (E7)
+
+Agentes New Relic (chart `nri-bundle` 8.0.39) instalados **pelo próprio k3s**: o `user_data` grava um
+manifesto `HelmChart` em `/var/lib/rancher/k3s/server/manifests` e o controlador de Helm do cluster
+instala no boot. Não usa `helm_release` do Terraform porque o API (6443) só é acessível por túnel SSM e a
+EC2 não existe quando o provider seria configurado.
+
+| | `hml` (t3.small) | `prod` (t3.medium) |
+|---|---|---|
+| infra (kubelet), kube-state-metrics, kube-events, logging | sim | sim |
+| `newrelic-prometheus-agent` (coleta `/q/metrics` da app) | **não** | sim |
+| `lowDataMode`, control plane do k3s, metadata-injection | ligado / desligado / desligado | ligado / desligado / desligado |
+
+- **Licença opcional**: secret `NEW_RELIC_LICENSE_KEY` do GitHub Environment (`homologacao` / `producao`).
+  Com ele, o Terraform grava um SecureString em `/oficina/<env>/newrelic_license_key` e a EC2 o lê **no boot**
+  (nunca vai ao `user_data`). Sem ele, o cluster sobe sem agentes e a infraestrutura não depende do New Relic.
+- O agente só é instalado em **instâncias novas** (o `user_data` roda uma vez): para ligar em um cluster
+  existente, destrua e aplique de novo.
+- Se o instance profile não puder ler o SSM, o boot continua e o k3s sobe sem agentes (aviso no log do cloud-init).
+- Todos os componentes têm `requests`/`limits` de memória. **Conferir depois de instalar**:
+  `kubectl top nodes` e `kubectl top pods -A`; se a app ficar `Pending`, ver spec 05 §4.
+- A aplicação é coletada pelo job `newrelic` do prometheus-agent: o pod precisa da anotação
+  `newrelic.io/scrape: "true"` (o job `default` só coleta alvos de integrações conhecidas).
+
 ## Contrato SSM publicado
 
 Parâmetros *standard* (gratuitos), legíveis por qualquer identidade da conta. Evita
