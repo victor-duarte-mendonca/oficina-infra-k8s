@@ -182,3 +182,11 @@ aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=ofic
 EKS, node group, Cluster Autoscaler, Multi-AZ do cluster, NAT Gateway e VPC endpoints (justificativa de
 custo em `oficina-app/specs/00-visao-geral.md` §3). Os agentes de observabilidade (`nri-bundle`) entram
 na etapa E7, pois exigem um cluster já no ar.
+
+## Documentação
+
+Documentação de decisão e de arquitetura vive em [`oficina-app`](https://github.com/victor-duarte-mendonca/oficina-app) (atravessa os quatro repositórios):
+
+- [Arquitetura e diagramas (componentes, sequência)](https://github.com/victor-duarte-mendonca/oficina-app/blob/main/docs/arquitetura.md)
+- [ADRs — decisões de arquitetura](https://github.com/victor-duarte-mendonca/oficina-app/blob/main/docs/adr/README.md) · [RFCs](https://github.com/victor-duarte-mendonca/oficina-app/blob/main/docs/rfc/)
+- [Runbook de sessão e custos](https://github.com/victor-duarte-mendonca/oficina-app/blob/main/docs/RUNBOOK.md) · [Roteiro de validação em produção](https://github.com/victor-duarte-mendonca/oficina-app/blob/main/docs/VALIDACAO-PROD.md)
