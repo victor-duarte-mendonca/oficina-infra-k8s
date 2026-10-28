@@ -98,8 +98,8 @@ Pela pipeline (`.github/workflows/terraform.yml`):
 |---|---|---|
 | `validate` | push e PR | `fmt`, `validate`, `tflint`, `trivy config` |
 | `plan` | PR | `terraform plan` no workspace do alvo (`homolog`→`hml`, `main`→`prod`) e comenta o plano no PR |
-| `apply` | push em `homolog` / `main` | `apply` no workspace correspondente; resumo com custo estimado |
-| `destroy` | `workflow_dispatch` | exige digitar `destroy-<workspace>`; varredura de órfãos por tag ao final |
+| `apply` | push em `homolog` / `main`; ou *Run workflow* com `confirm` vazio | `apply` no workspace correspondente; resumo com custo estimado |
+| `destroy` | `workflow_dispatch` com `confirm` preenchido | exige digitar `destroy-<workspace>`; varredura de órfãos por tag ao final |
 
 `plan` só executa com as credenciais da sessão e o `ALLOWED_CIDR`; sem eles passa com um `::notice::`.
 
@@ -146,7 +146,7 @@ próprio no repositório `oficina-infra-database`.
 ## ⚠️ Destroy
 
 **RDS, Elastic IP e API Gateway continuam cobrando após o "End Lab".** Ao fim de cada sessão rode o
-workflow `Terraform` → *Run workflow* → `destroy`, escolha o workspace e digite `destroy-<workspace>`.
+workflow `Terraform` → *Run workflow* (Use workflow from: `homolog` para hml), escolha o workspace e digite em `confirm` `destroy-<workspace>`.
 Depois confira os órfãos:
 
 ```bash
