@@ -50,8 +50,15 @@ resource "aws_instance" "k3s" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh.tpl", {
-    k3s_public_ip = aws_eip.k3s.public_ip
+    k3s_public_ip      = aws_eip.k3s.public_ip
+    aws_region         = var.aws_region
+    newrelic_enabled   = local.nri_enabled
+    license_ssm_name   = local.nri_license_ssm_name
+    helmchart_manifest = local.nri_helmchart_manifest
   })
+
+  # A licença precisa existir no SSM antes do boot: o user_data a lê uma única vez.
+  depends_on = [aws_ssm_parameter.newrelic_license_key]
 
   tags = { Name = "${local.name_prefix}-k3s" }
 }

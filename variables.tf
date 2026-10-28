@@ -32,3 +32,10 @@ variable "instance_type_override" {
   type        = string
   default     = null
 }
+
+variable "newrelic_license_key" {
+  description = "Licença de ingestão do New Relic (E7). Vazio = cluster sobe sem agentes. Vai para um SecureString no SSM; nunca para o user_data."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
