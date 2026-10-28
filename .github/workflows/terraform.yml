@@ -1,7 +1,8 @@
 name: Terraform
 
 # E2 (spec 06 §6): validate em todo PR/push; plan em PR (comenta o plano); apply por branch
-# (homolog -> workspace hml, main -> workspace prod); destroy manual com confirmação.
+# (homolog -> workspace hml, main -> workspace prod). Disparo manual (Run workflow, "Use workflow from"
+# homolog para hml, main para prod): `confirm` vazio = apply; "destroy-<workspace>" = destroy.
 
 on:
   push:
@@ -11,14 +12,15 @@ on:
   workflow_dispatch:
     inputs:
       workspace:
-        description: "Workspace a destruir"
+        description: "Workspace alvo (hml com a branch homolog; prod com a branch main)"
         type: choice
         options: [hml, prod]
+        default: hml
         required: true
       confirm:
-        description: 'Digite "destroy-<workspace>" para confirmar (ex.: destroy-hml)'
+        description: 'Vazio = apply. Para destruir, digite "destroy-<workspace>" (ex.: destroy-hml)'
         type: string
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -110,17 +112,29 @@ jobs:
 
   apply:
     name: apply
-    if: github.event_name == 'push'
+    # validate é pulado no disparo manual; !cancelled() impede que o skip propague para o apply.
+    if: >-
+      !cancelled() && needs.validate.result != 'failure' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.confirm == '' || inputs.confirm == null)))
     needs: [validate]
     runs-on: ubuntu-latest
-    # homolog -> hml / homologacao ; main -> prod / producao (required reviewer).
-    environment: ${{ github.ref_name == 'main' && 'producao' || 'homologacao' }}
+    # push: homolog -> hml / homologacao, main -> prod / producao. Manual: workspace escolhido.
+    # producao exige reviewer.
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'producao' || 'homologacao' }}
     env:
-      WORKSPACE: ${{ github.ref_name == 'main' && 'prod' || 'hml' }}
+      WORKSPACE: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
     concurrency:
-      group: terraform-state-${{ github.ref_name == 'main' && 'prod' || 'hml' }}
+      group: terraform-state-${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
       cancel-in-progress: false
     steps:
+      - name: Workspace coerente com a branch
+        run: |
+          expected=$([ "$GITHUB_REF_NAME" = "main" ] && echo prod || echo hml)
+          if [ "$WORKSPACE" != "$expected" ]; then
+            echo "::error::Workspace ${WORKSPACE} exige 'Use workflow from' = $([ "$WORKSPACE" = prod ] && echo main || echo homolog) (atual: ${GITHUB_REF_NAME})."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -151,7 +165,7 @@ jobs:
 
   destroy:
     name: destroy
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm != '' && inputs.confirm != null
     runs-on: ubuntu-latest
     environment: ${{ inputs.workspace == 'prod' && 'producao' || 'homologacao' }}
     env:
