@@ -1,0 +1,180 @@
+name: Observability
+
+# E7 (spec 05 §7-§8): dashboards, alertas e monitor Synthetics do New Relic como código (pasta
+# observability/, state separado da infraestrutura). validate em todo PR/push que a toca; apply em push
+# (homolog -> hml, main -> prod) ou manual; destroy manual com confirmação.
+#
+# Precisa de AWS só para o state (S3) e para ler a URL do gateway no SSM; sem sessão AWS ativa ou sem
+# NEW_RELIC_API_KEY o apply é ignorado com um aviso (o merge não fica vermelho). Para aplicar de verdade:
+# renove a sessão (set-aws-session-secrets.sh) e dispare Run workflow com confirm vazio.
+
+on:
+  push:
+    branches: [main, homolog]
+    paths: ["observability/**", ".github/workflows/observability.yml"]
+  pull_request:
+    branches: [main, homolog]
+    paths: ["observability/**", ".github/workflows/observability.yml"]
+  workflow_dispatch:
+    inputs:
+      workspace:
+        description: "Workspace alvo (hml com a branch homolog; prod com a branch main)"
+        type: choice
+        options: [hml, prod]
+        default: hml
+        required: true
+      confirm:
+        description: 'Vazio = apply. Para destruir, digite "destroy-<workspace>" (ex.: destroy-hml)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  TF_VERSION: "1.10.5"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  validate:
+    name: observability-validate
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: observability
+    env:
+      # validate roda sem backend; TF_WORKSPACE satisfaz a guarda de locals.tf.
+      TF_WORKSPACE: hml
+      TF_VAR_newrelic_account_id: "1"
+      TF_VAR_newrelic_api_key: validate-only
+      TF_VAR_alert_email: validate@example.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform fmt -check -recursive -diff
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --format compact --config "$GITHUB_WORKSPACE/.tflint.hcl"
+
+  apply:
+    name: observability-apply
+    needs: [validate]
+    # validate é pulado no disparo manual; !cancelled() impede que o skip propague para o apply.
+    if: >-
+      !cancelled() && needs.validate.result != 'failure' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.confirm == '' || inputs.confirm == null)))
+    runs-on: ubuntu-latest
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'producao' || 'homologacao' }}
+    env:
+      WORKSPACE: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      TF_VAR_newrelic_api_key: ${{ secrets.NEW_RELIC_API_KEY }}
+      TF_VAR_newrelic_account_id: ${{ secrets.NEW_RELIC_ACCOUNT_ID }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    concurrency:
+      group: terraform-state-observability-${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
+      cancel-in-progress: false
+    steps:
+      - name: Workspace coerente com a branch
+        run: |
+          expected=$([ "$GITHUB_REF_NAME" = "main" ] && echo prod || echo hml)
+          if [ "$WORKSPACE" != "$expected" ]; then
+            echo "::error::Workspace ${WORKSPACE} exige 'Use workflow from' = $([ "$WORKSPACE" = prod ] && echo main || echo homolog) (atual: ${GITHUB_REF_NAME})."
+            exit 1
+          fi
+      - name: Pré-requisitos (sessão AWS e secrets do New Relic)
+        id: gate
+        run: |
+          reason=""
+          [ -n "$TF_VAR_newrelic_api_key" ] || reason="NEW_RELIC_API_KEY ausente no environment"
+          [ -n "$TF_VAR_newrelic_account_id" ] || reason="${reason:+$reason; }NEW_RELIC_ACCOUNT_ID ausente"
+          [ -n "$TF_VAR_alert_email" ] || reason="${reason:+$reason; }ALERT_EMAIL ausente"
+          if [ -z "$reason" ] && ! aws sts get-caller-identity > /dev/null 2>&1; then
+            reason="sessão AWS inativa ou credenciais expiradas: rode set-aws-session-secrets.sh"
+          fi
+          if [ -n "$reason" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "::error::Apply manual impossível: ${reason}"
+              exit 1
+            fi
+            echo "::notice::Apply ignorado: ${reason}."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.ready == 'true'
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform apply
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          BUCKET="$(bash scripts/bootstrap-state-bucket.sh)"
+          # O monitor Synthetics precisa da URL do gateway (publicada pelo oficina-auth-lambda); sem ela, é omitido.
+          GATEWAY_URL="$(aws ssm get-parameter --name "/oficina/${WORKSPACE}/api_gateway_url" --query Parameter.Value --output text 2>/dev/null || true)"
+          [ -n "$GATEWAY_URL" ] || echo "::warning::/oficina/${WORKSPACE}/api_gateway_url não existe (gateway fora do ar): sem monitor Synthetics nem alerta de disponibilidade."
+          export TF_VAR_gateway_url="$GATEWAY_URL"
+          cd observability
+          terraform init -input=false -backend-config="bucket=${BUCKET}"
+          terraform workspace select -or-create "$WORKSPACE"
+          terraform apply -input=false -auto-approve -no-color
+      - name: Resumo
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: observability
+        run: |
+          {
+            echo "### observability aplicada — workspace \`$WORKSPACE\`"
+            echo ""
+            echo "- Dashboards: Oficina — Negócio e Oficina — Operação (New Relic > Dashboards)"
+            echo "- Alertas: políticas \`oficina-${WORKSPACE} [...]\`, notificação por e-mail"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  destroy:
+    name: observability-destroy
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm != '' && inputs.confirm != null
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.workspace == 'prod' && 'producao' || 'homologacao' }}
+    env:
+      WORKSPACE: ${{ inputs.workspace }}
+      CONFIRM: ${{ inputs.confirm }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      TF_VAR_newrelic_api_key: ${{ secrets.NEW_RELIC_API_KEY }}
+      TF_VAR_newrelic_account_id: ${{ secrets.NEW_RELIC_ACCOUNT_ID }}
+      # O destroy exige as variáveis obrigatórias, mas o e-mail não é usado.
+      TF_VAR_alert_email: destroy-only@example.com
+    concurrency:
+      group: terraform-state-observability-${{ inputs.workspace }}
+      cancel-in-progress: false
+    steps:
+      - name: Confirmação digitada
+        run: |
+          if [ "$CONFIRM" != "destroy-${WORKSPACE}" ]; then
+            echo "::error::Confirmação incorreta. Esperado: destroy-${WORKSPACE}"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform destroy
+        run: |
+          BUCKET="$(bash scripts/bootstrap-state-bucket.sh)"
+          cd observability
+          terraform init -input=false -backend-config="bucket=${BUCKET}"
+          terraform workspace select "$WORKSPACE"
+          terraform destroy -input=false -auto-approve -no-color

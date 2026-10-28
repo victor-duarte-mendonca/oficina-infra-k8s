@@ -103,6 +103,21 @@ Pela pipeline (`.github/workflows/terraform.yml`):
 
 `plan` só executa com as credenciais da sessão e o `ALLOWED_CIDR`; sem eles passa com um `::notice::`.
 
+### Dashboards, alertas e Synthetics (pasta `observability/`)
+
+Raiz Terraform **separada** (state próprio em `oficina/observability/<workspace>`), provider `newrelic`:
+2 dashboards a partir de JSON versionado (`dashboards/*.json.tftpl`), 6 políticas de alerta (8 condições NRQL)
+roteadas por e-mail e um monitor Synthetics (ping a `GET <gateway>/health` a cada 5 min). Workflow
+`Observability` (`.github/workflows/observability.yml`): `validate` em PR; `apply` em push ou manual.
+
+- Secrets do environment: `NEW_RELIC_API_KEY` (User key `NRAK-...`, **não** é a licença de ingestão),
+  `NEW_RELIC_ACCOUNT_ID` e `ALERT_EMAIL`. Sem eles, ou sem sessão AWS ativa, o apply é **ignorado com aviso**
+  (verde sem ter aplicado: confira o `notice`). O disparo manual falha de propósito.
+- A URL do gateway vem do SSM (`/oficina/<env>/api_gateway_url`); sem o gateway, o monitor e o alerta de
+  disponibilidade não são criados.
+- As consultas NRQL usam os nomes documentados de spans OTLP, métricas Prometheus e K8s samples; **confirmar
+  com dados reais na sessão AWS** (spec 05 §10) e ajustar o JSON/`alerts.tf`.
+
 ## Contrato SSM publicado
 
 Parâmetros *standard* (gratuitos), legíveis por qualquer identidade da conta. Evita
