@@ -8,10 +8,13 @@ locals {
     hml = {
       instance_type = "t3.small" # 2 GiB — comporta k3s + 2 réplicas; sem nri-bundle completo (spec 06 §4.3)
       volume_size   = 20
+      # Sem o prometheus-agent: t3.small não comporta o nri-bundle completo (spec 06 §4.3).
+      prometheus_agent = false
     }
     prod = {
-      instance_type = "t3.medium" # 4 GiB — comporta k3s + 4 réplicas + observabilidade completa
-      volume_size   = 20
+      instance_type    = "t3.medium" # 4 GiB — comporta k3s + 4 réplicas + observabilidade completa
+      volume_size      = 20
+      prometheus_agent = true
     }
   }
 
