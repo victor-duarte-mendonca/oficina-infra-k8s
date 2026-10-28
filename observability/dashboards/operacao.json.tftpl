@@ -1,0 +1,104 @@
+{
+  "name": "Oficina — Operação (${env})",
+  "description": "Latência das APIs, recursos do Kubernetes, uptime e logs (R7).",
+  "permissions": "PUBLIC_READ_WRITE",
+  "pages": [
+    {
+      "name": "Operação",
+      "description": "",
+      "widgets": [
+        {
+          "title": "Latência das APIs — p50 / p95 / p99 (ms)",
+          "layout": { "column": 1, "row": 1, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.line" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT percentile(duration.ms, 50, 95, 99) FROM Span WHERE entity.name = '${service}' AND span.kind = 'server' AND deployment.environment = '${env}' SINCE 1 hour ago TIMESERIES"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Requisições por minuto",
+          "layout": { "column": 7, "row": 1, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.area" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT rate(count(*), 1 minute) FROM Span WHERE entity.name = '${service}' AND span.kind = 'server' AND deployment.environment = '${env}' SINCE 1 hour ago TIMESERIES"
+              }
+            ]
+          }
+        },
+        {
+          "title": "CPU por pod (cores)",
+          "layout": { "column": 1, "row": 4, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.line" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT average(cpuUsedCores) FROM K8sContainerSample WHERE clusterName = '${cluster}' SINCE 1 hour ago TIMESERIES FACET podName"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Memória por pod (MB)",
+          "layout": { "column": 7, "row": 4, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.line" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT average(memoryWorkingSetBytes) / 1000000 FROM K8sContainerSample WHERE clusterName = '${cluster}' SINCE 1 hour ago TIMESERIES FACET podName"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Disponibilidade (Synthetics, % de checks com sucesso)",
+          "layout": { "column": 1, "row": 7, "width": 4, "height": 3 },
+          "visualization": { "id": "viz.billboard" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT percentage(count(*), WHERE result = 'SUCCESS') FROM SyntheticCheck WHERE monitorName = '${prefix}-health' SINCE 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Falhas no processamento de ordens de serviço",
+          "layout": { "column": 5, "row": 7, "width": 4, "height": 3 },
+          "visualization": { "id": "viz.billboard" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT sum(oficina_work_order_transition_errors_total) FROM Metric WHERE cluster_name = '${cluster}' SINCE 24 hours ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Logs por nível (correlacionáveis por correlationId)",
+          "layout": { "column": 9, "row": 7, "width": 4, "height": 3 },
+          "visualization": { "id": "viz.pie" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT count(*) FROM Log WHERE cluster_name = '${cluster}' SINCE 1 hour ago FACET level"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
