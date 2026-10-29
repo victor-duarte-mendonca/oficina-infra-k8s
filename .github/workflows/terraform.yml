@@ -1,30 +1,45 @@
 name: Terraform
 
-# E0 (spec 08): validate em todo PR/push; plan quando há credenciais da sessão AWS
-# Academy. apply por branch (homolog -> hml, main -> prod) e destroy entram em E2.
+# E2 (spec 06 §6): validate em todo PR/push; plan em PR (comenta o plano); apply por branch
+# (homolog -> workspace hml, main -> workspace prod). Disparo manual (Run workflow, "Use workflow from"
+# homolog para hml, main para prod): `confirm` vazio = apply; "destroy-<workspace>" = destroy.
+
 on:
   push:
     branches: [main, homolog]
   pull_request:
     branches: [main, homolog]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      workspace:
+        description: "Workspace alvo (hml com a branch homolog; prod com a branch main)"
+        type: choice
+        options: [hml, prod]
+        default: hml
+        required: true
+      confirm:
+        description: 'Vazio = apply. Para destruir, digite "destroy-<workspace>" (ex.: destroy-hml)'
+        type: string
+        required: false
 
 permissions:
   contents: read
   pull-requests: write
 
-concurrency:
-  group: terraform-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   AWS_REGION: us-east-1
   TF_VERSION: "1.10.5"
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_allowed_cidr: ${{ secrets.ALLOWED_CIDR }}
 
 jobs:
   validate:
     name: validate
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    env:
+      # validate roda sem backend; TF_WORKSPACE satisfaz o guard de locals.tf.
+      TF_WORKSPACE: hml
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -33,32 +48,176 @@ jobs:
       - run: terraform fmt -check -recursive -diff
       - run: terraform init -backend=false -input=false
       - run: terraform validate
+      - uses: terraform-linters/setup-tflint@v4
+      - run: tflint --format compact
+      - name: trivy config (IaC scan)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivyignores: .trivyignore
 
   plan:
     name: plan
+    if: github.event_name == 'pull_request'
     needs: [validate]
     runs-on: ubuntu-latest
+    env:
+      # PR para homolog ensaia em hml; PR para main (promoção) planeja prod.
+      WORKSPACE: ${{ github.base_ref == 'main' && 'prod' || 'hml' }}
+      # A licença real é secret de environment (ver apply); o plan usa um placeholder para ensaiar o
+      # caminho com agentes. Em instância existente o plan mostra o parâmetro como alterado (ruído).
+      TF_VAR_newrelic_license_key: plan-only-placeholder
+      # Credenciais via ambiente: a action configure-aws-credentials falha com token expirado
+      # antes de eu poder tratar "sessão inativa" como "plan não executado".
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      AWS_DEFAULT_REGION: us-east-1
     steps:
       - uses: actions/checkout@v4
-      - name: Credenciais da sessão presentes?
+      - name: Sessão AWS ativa e ALLOWED_CIDR definido?
         id: creds
-        run: echo "present=${{ secrets.AWS_ACCESS_KEY_ID != '' }}" >> "$GITHUB_OUTPUT"
-      - name: Sem credenciais AWS na sessão — plan não executado
-        if: steps.creds.outputs.present != 'true'
-        run: echo "::notice::AWS_ACCESS_KEY_ID ausente; terraform plan requer as credenciais STS da sessão AWS Academy."
-      - uses: aws-actions/configure-aws-credentials@v4
+        run: |
+          if [ -z "$TF_VAR_allowed_cidr" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ALLOWED_CIDR ausente; terraform plan não executado."
+          elif aws sts get-caller-identity > /dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Sem sessão AWS ativa (credenciais ausentes ou expiradas); terraform plan não executado. Rode set-aws-session-secrets.sh."
+          fi
+      - uses: hashicorp/setup-terraform@v3
         if: steps.creds.outputs.present == 'true'
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform plan
+        if: steps.creds.outputs.present == 'true'
+        run: |
+          BUCKET="$(bash scripts/bootstrap-state-bucket.sh)"
+          terraform init -input=false -backend-config="bucket=${BUCKET}"
+          terraform workspace select -or-create "$WORKSPACE"
+          terraform plan -input=false -no-color -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+      - name: Comentar plano no PR
+        if: steps.creds.outputs.present == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const max = 60000;
+            let plan = fs.readFileSync('plan.txt', 'utf8');
+            if (plan.length > max) plan = plan.slice(0, max) + '\n... (plano truncado)';
+            const body = `### terraform plan — workspace \`${process.env.WORKSPACE}\`\n\n<details><summary>Plano</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, body,
+            });
+
+  apply:
+    name: apply
+    # validate é pulado no disparo manual; !cancelled() impede que o skip propague para o apply.
+    if: >-
+      !cancelled() && needs.validate.result != 'failure' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.confirm == '' || inputs.confirm == null)))
+    needs: [validate]
+    runs-on: ubuntu-latest
+    # push: homolog -> hml / homologacao, main -> prod / producao. Manual: workspace escolhido.
+    # producao exige reviewer.
+    environment: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'producao' || 'homologacao' }}
+    env:
+      WORKSPACE: ${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
+      # Opcional: sem a licença o cluster sobe sem agentes New Relic (E7).
+      TF_VAR_newrelic_license_key: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+    concurrency:
+      group: terraform-state-${{ (github.event_name == 'workflow_dispatch' && inputs.workspace == 'prod' || github.event_name == 'push' && github.ref_name == 'main') && 'prod' || 'hml' }}
+      cancel-in-progress: false
+    steps:
+      - name: Workspace coerente com a branch
+        run: |
+          expected=$([ "$GITHUB_REF_NAME" = "main" ] && echo prod || echo hml)
+          if [ "$WORKSPACE" != "$expected" ]; then
+            echo "::error::Workspace ${WORKSPACE} exige 'Use workflow from' = $([ "$WORKSPACE" = prod ] && echo main || echo homolog) (atual: ${GITHUB_REF_NAME})."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
       - uses: hashicorp/setup-terraform@v3
-        if: steps.creds.outputs.present == 'true'
         with:
           terraform_version: ${{ env.TF_VERSION }}
-      - name: terraform plan
-        if: steps.creds.outputs.present == 'true'
+          terraform_wrapper: false
+      - name: terraform apply
         run: |
-          terraform init -input=false
-          terraform plan -input=false -no-color
+          BUCKET="$(bash scripts/bootstrap-state-bucket.sh)"
+          terraform init -input=false -backend-config="bucket=${BUCKET}"
+          terraform workspace select -or-create "$WORKSPACE"
+          terraform apply -input=false -auto-approve -no-color
+      - name: Resumo
+        run: |
+          COST=$([ "$WORKSPACE" = "prod" ] && echo "0,049" || echo "0,028")
+          {
+            echo "### apply concluído — workspace \`$WORKSPACE\`"
+            echo ""
+            echo "- Aplicação: $(terraform output -raw application_url)"
+            echo "- ECR: $(terraform output -raw ecr_repository_url)"
+            echo "- Custo estimado enquanto ligado: ~US\$ $COST/h (EC2 + IPv4 + EBS). **Rode o workflow de destroy ao fim da sessão.**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  destroy:
+    name: destroy
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm != '' && inputs.confirm != null
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.workspace == 'prod' && 'producao' || 'homologacao' }}
+    env:
+      WORKSPACE: ${{ inputs.workspace }}
+      CONFIRM: ${{ inputs.confirm }}
+    concurrency:
+      group: terraform-state-${{ inputs.workspace }}
+      cancel-in-progress: false
+    steps:
+      - name: Confirmação digitada
+        run: |
+          if [ "$CONFIRM" != "destroy-${WORKSPACE}" ]; then
+            echo "::error::Confirmação incorreta. Esperado: destroy-${WORKSPACE}"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: terraform destroy
+        run: |
+          BUCKET="$(bash scripts/bootstrap-state-bucket.sh)"
+          terraform init -input=false -backend-config="bucket=${BUCKET}"
+          terraform workspace select "$WORKSPACE"
+          terraform destroy -input=false -auto-approve -no-color
+      - name: Varredura de órfãos por tag
+        run: |
+          LEFT=$(aws resourcegroupstaggingapi get-resources \
+            --tag-filters "Key=Project,Values=oficina" "Key=Environment,Values=${WORKSPACE}" \
+            --query 'ResourceTagMappingList[].ResourceARN' --output text)
+          if [ -n "$LEFT" ]; then
+            echo "::warning::Recursos ainda com a tag (a API de tags pode atrasar alguns minutos)."
+            echo "$LEFT" | tr '\t' '\n'
+            echo "### Possíveis órfãos (${WORKSPACE})" >> "$GITHUB_STEP_SUMMARY"
+            echo "$LEFT" | tr '\t' '\n' | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Nenhum recurso órfão com Project=oficina, Environment=${WORKSPACE}."
+          fi

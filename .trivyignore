@@ -1,0 +1,15 @@
+# Achados do "trivy config" aceitos de propósito. Cada um tem justificativa; remover a
+# linha reabre o achado.
+
+# Egress 0.0.0.0/0 no SG do k3s: o node precisa instalar o k3s (get.k3s.io), puxar imagens
+# do ECR, falar com o canal do SSM e com o New Relic. Sem NAT Gateway (spec 00 §3, custo),
+# não há como restringir o destino por CIDR.
+AWS-0104
+
+# IP público na subnet pública: é a EC2 do k3s, que precisa de saída para a internet sem
+# NAT Gateway. O ingresso é restrito por security group (/32 do aluno e faixas do API Gateway).
+AWS-0164
+
+# Tags de imagem mutáveis: o Deployment da aplicação usa ":latest" (oficina-app/k8s/deployment.yaml).
+# Reavaliar quando o deploy passar a referenciar a imagem por SHA do commit.
+AWS-0031

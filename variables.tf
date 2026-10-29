@@ -5,7 +5,7 @@ variable "project_name" {
 }
 
 variable "aws_region" {
-  description = "Região AWS. Deve coincidir com a região do bucket de state em backend.tf"
+  description = "Região AWS. Deve coincidir com a região do backend em backend.tf"
   type        = string
   default     = "us-east-1"
 }
@@ -27,25 +27,15 @@ variable "allowed_cidr" {
   }
 }
 
-variable "db_password" {
-  description = "Senha do RDS — fornecer via TF_VAR_db_password, nunca hardcoded"
+variable "instance_type_override" {
+  description = "Sobrescreve o tipo da EC2 definido para o workspace em locals.tf (ex.: t3.medium em hml para validar dashboards)"
   type        = string
+  default     = null
+}
+
+variable "newrelic_license_key" {
+  description = "Licença de ingestão do New Relic (E7). Vazio = cluster sobe sem agentes. Vai para um SecureString no SSM; nunca para o user_data."
+  type        = string
+  default     = ""
   sensitive   = true
-
-  validation {
-    condition     = length(var.db_password) >= 16
-    error_message = "A senha do RDS deve ter ao menos 16 caracteres."
-  }
-}
-
-variable "instance_type" {
-  description = "Tipo da EC2 que hospeda o k3s. t3.medium (2 vCPU / 4 GiB) comporta o cluster mais 4 réplicas da aplicação"
-  type        = string
-  default     = "t3.medium"
-}
-
-variable "db_instance_class" {
-  description = "Classe da instância RDS"
-  type        = string
-  default     = "db.t4g.micro"
 }

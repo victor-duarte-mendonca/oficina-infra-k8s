@@ -7,7 +7,7 @@ resource "tls_private_key" "k3s" {
 }
 
 resource "aws_key_pair" "k3s" {
-  key_name   = "${var.project_name}-k3s-key"
+  key_name   = "${local.name_prefix}-k3s-key"
   public_key = tls_private_key.k3s.public_key_openssh
 }
 
@@ -15,12 +15,12 @@ resource "aws_key_pair" "k3s" {
 # então user_data pode referenciá-lo diretamente via templatefile().
 resource "aws_eip" "k3s" {
   domain = "vpc"
-  tags   = { Name = "${var.project_name}-k3s-eip" }
+  tags   = { Name = "${local.name_prefix}-k3s-eip" }
 }
 
 resource "aws_instance" "k3s" {
   ami                    = data.aws_ssm_parameter.al2023_ami.value
-  instance_type          = var.instance_type
+  instance_type          = local.instance_type
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.k3s.id]
   iam_instance_profile   = data.aws_iam_instance_profile.lab_instance_profile.name
@@ -28,7 +28,7 @@ resource "aws_instance" "k3s" {
 
   root_block_device {
     volume_type = "gp3"
-    volume_size = 20
+    volume_size = local.config.volume_size
 
     # O disco do node guarda o etcd do k3s (que contém os Secrets do cluster: senha
     # do banco, chave privada do JWT, credencial do ECR) e o kubeconfig. Criptografar
@@ -50,10 +50,17 @@ resource "aws_instance" "k3s" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh.tpl", {
-    k3s_public_ip = aws_eip.k3s.public_ip
+    k3s_public_ip      = aws_eip.k3s.public_ip
+    aws_region         = var.aws_region
+    newrelic_enabled   = local.nri_enabled
+    license_ssm_name   = local.nri_license_ssm_name
+    helmchart_manifest = local.nri_helmchart_manifest
   })
 
-  tags = { Name = "${var.project_name}-k3s" }
+  # A licença precisa existir no SSM antes do boot: o user_data a lê uma única vez.
+  depends_on = [aws_ssm_parameter.newrelic_license_key]
+
+  tags = { Name = "${local.name_prefix}-k3s" }
 }
 
 resource "aws_eip_association" "k3s" {

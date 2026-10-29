@@ -1,0 +1,65 @@
+{
+  "name": "Oficina — Negócio (${env})",
+  "description": "Volume de ordens de serviço, tempo por status e falhas. Fonte: /q/metrics via newrelic-prometheus-agent (R7).",
+  "permissions": "PUBLIC_READ_WRITE",
+  "pages": [
+    {
+      "name": "Negócio",
+      "description": "",
+      "widgets": [
+        {
+          "title": "Volume diário de ordens de serviço (por origem)",
+          "layout": { "column": 1, "row": 1, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.bar" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT sum(oficina_work_orders_created_total) FROM Metric WHERE cluster_name = '${cluster}' SINCE 14 days ago TIMESERIES 1 day FACET origin"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Tempo médio por status — Diagnóstico, Execução, Finalização (segundos)",
+          "layout": { "column": 7, "row": 1, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.line" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT sum(oficina_work_order_status_duration_seconds_sum) / sum(oficina_work_order_status_duration_seconds_count) FROM Metric WHERE cluster_name = '${cluster}' AND status IN ('IN_DIAGNOSIS', 'IN_EXECUTION', 'FINISHED') SINCE 7 days ago TIMESERIES FACET status"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Erros e falhas nas integrações",
+          "layout": { "column": 1, "row": 4, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.line" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT sum(oficina_integration_failures_total) AS 'Falhas de integração', sum(oficina_work_order_transition_errors_total) AS 'Transições inválidas' FROM Metric WHERE cluster_name = '${cluster}' SINCE 24 hours ago TIMESERIES"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Funil de transições de status",
+          "layout": { "column": 7, "row": 4, "width": 6, "height": 3 },
+          "visualization": { "id": "viz.table" },
+          "rawConfiguration": {
+            "nrqlQueries": [
+              {
+                "accountIds": [${account_id}],
+                "query": "SELECT sum(oficina_work_order_status_transitions_total) AS 'Transições' FROM Metric WHERE cluster_name = '${cluster}' SINCE 7 days ago FACET from, to"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
