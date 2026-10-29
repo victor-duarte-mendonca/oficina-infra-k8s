@@ -54,7 +54,7 @@
             "nrqlQueries": [
               {
                 "accountIds": [${account_id}],
-                "query": "SELECT sum(oficina_work_order_status_transitions_total) AS 'Transições' FROM Metric WHERE cluster_name = '${cluster}' SINCE 7 days ago FACET from, to"
+                "query": "SELECT sum(oficina_work_order_status_transitions_total) AS 'Transições' FROM Metric WHERE cluster_name = '${cluster}' SINCE 7 days ago FACET `from`, `to`"
               }
             ]
           }
