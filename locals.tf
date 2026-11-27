@@ -6,7 +6,7 @@ locals {
 
   environments = {
     hml = {
-      instance_type = "t3.small" # 2 GiB — comporta k3s + 2 réplicas; sem nri-bundle completo (spec 06 §4.3)
+      instance_type = "t3.medium" # 4 GiB (Fase 4, spec 12 §3): t3.small nao comporta k3s + OS + Billing + Execution
       volume_size   = 20
       # Sem o prometheus-agent: t3.small não comporta o nri-bundle completo (spec 06 §4.3).
       prometheus_agent = false
