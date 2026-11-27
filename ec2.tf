@@ -41,11 +41,15 @@ resource "aws_instance" "k3s" {
   # http://169.254.169.254 com um simples GET e lê as credenciais temporárias do
   # instance profile. Com http_tokens=required é preciso um PUT prévio para obter o
   # token, o que a maioria dos vetores de SSRF não consegue fazer.
-  # hop_limit=1 impede que o tráfego de dentro de um container alcance o IMDS.
+  # hop_limit=2 (Fase 4, ADR 0022): os servicos Billing e Execution precisam chamar SQS e DynamoDB, e o Academy nao
+  # oferece IRSA nem usuarios IAM persistentes; com hop_limit=1 um pod nao alcancaria as credenciais do LabRole.
+  # A defesa passa a ser a NetworkPolicy dos manifestos: so os pods dos 3 servicos podem falar com 169.254.169.254
+  # (teste da spec 12 §6: um pod avulso NAO alcanca o IMDS). IMDSv2 (http_tokens=required) continua obrigatorio.
+  # Limitacao: "IAM por servico" nao e viavel no Academy (LabRole unico).
   metadata_options {
     http_endpoint               = "enabled"
     http_tokens                 = "required"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
     instance_metadata_tags      = "enabled"
   }
 
